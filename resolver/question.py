@@ -3,6 +3,7 @@ import random
 import re
 import secrets
 import time
+import concurrent.futures
 from functools import lru_cache
 from typing import Callable, List, Optional
 
@@ -310,6 +311,57 @@ class QuestionResolver:
         self.cb_confirm_submit = cb
         return cb
 
+    def process_question(self, index, question) ->None:
+        # 调用搜索器
+        results = self.searcher.invoke(question)
+
+        # 显示搜索器返回
+        msg_console.update(
+            Panel(
+                SearchRespShowComp(question, results),
+                title="搜索器返回",
+            )
+        )
+
+        # 填充选项
+        status = self.fill(question, results)
+        tb.push_row(
+            f"[green]{index + 1}[/] ({question.id})",
+            question.type.name,
+            question.value,
+            (f"[green]{question.answer}" if status else "[red]未匹配"),
+        )
+
+        # 记录错题
+        if status == False:
+            self.incompleted_cnt += 1
+            self.mistakes.append((question, "/".join(str(result.answer) for result in results)))
+        else:
+            self.completed_cnt += 1
+        refresh_title()
+
+        # 单题提交
+        time.sleep(self.persubmit_delay)  # 提交延迟
+        try:
+            result = self.exam_dto.submit(index=index, question=question)
+        except APIError as e:
+            self.logger.warning(
+                f"题目提交失败 -> {e.__class__.__name__} {e.__str__()} " f"[{self.exam_dto}]"
+            )
+            msg_console.update(
+                Panel(
+                    f"{e.__class__.__name__} {e.__str__()}", title="提交失败！", border_style="red"
+                )
+            )
+        else:
+            self.logger.info(f"提交成功 [{self.exam_dto}]")
+            msg_console.update(
+                Panel(
+                    JSON.from_data(result, ensure_ascii=False),
+                    title="题目提交成功 QwQ！",
+                    border_style="green",
+                )
+            )
     def execute(self) -> None:
         """执行自动接管逻辑"""
         self.logger.info(f"开始完成试题 {self.exam_dto}")
@@ -342,59 +394,63 @@ class QuestionResolver:
             tb.title = "  ".join(title)
 
         refresh_title()
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(process_question, index, question) for index, question in enumerate(self.exam_dto)]
+            for future in concurrent.futures.as_completed(futures):
+                future.result()
         # 迭代答题接口, 遍历所有题目
-        for index, question in self.exam_dto:
-            # 调用搜索器
-            results = self.searcher.invoke(question)
+        # for index, question in self.exam_dto:
+        #     # 调用搜索器
+        #     results = self.searcher.invoke(question)
 
-            # 显示搜索器返回
-            msg_console.update(
-                Panel(
-                    SearchRespShowComp(question, results),
-                    title="搜索器返回",
-                )
-            )
+        #     # 显示搜索器返回
+        #     msg_console.update(
+        #         Panel(
+        #             SearchRespShowComp(question, results),
+        #             title="搜索器返回",
+        #         )
+        #     )
 
-            # 填充选项
-            status = self.fill(question, results)
-            tb.push_row(
-                f"[green]{index + 1}[/] ({question.id})",
-                question.type.name,
-                question.value,
-                (f"[green]{question.answer}" if status else "[red]未匹配"),
-            )
+        #     # 填充选项
+        #     status = self.fill(question, results)
+        #     tb.push_row(
+        #         f"[green]{index + 1}[/] ({question.id})",
+        #         question.type.name,
+        #         question.value,
+        #         (f"[green]{question.answer}" if status else "[red]未匹配"),
+        #     )
 
-            # 记录错题
-            if status == False:
-                self.incompleted_cnt += 1
-                self.mistakes.append((question, "/".join(str(result.answer) for result in results)))
-            else:
-                self.completed_cnt += 1
-            refresh_title()
+        #     # 记录错题
+        #     if status == False:
+        #         self.incompleted_cnt += 1
+        #         self.mistakes.append((question, "/".join(str(result.answer) for result in results)))
+        #     else:
+        #         self.completed_cnt += 1
+        #     refresh_title()
 
-            # 单题提交
-            time.sleep(self.persubmit_delay)  # 提交延迟
-            try:
-                result = self.exam_dto.submit(index=index, question=question)
-            except APIError as e:
-                self.logger.warning(
-                    f"题目提交失败 -> {e.__class__.__name__} {e.__str__()} " f"[{self.exam_dto}]"
-                )
-                msg_console.update(
-                    Panel(
-                        f"{e.__class__.__name__} {e.__str__()}", title="提交失败！", border_style="red"
-                    )
-                )
-            else:
-                self.logger.info(f"提交成功 [{self.exam_dto}]")
-                msg_console.update(
-                    Panel(
-                        JSON.from_data(result, ensure_ascii=False),
-                        title="题目提交成功 QwQ！",
-                        border_style="green",
-                    )
-                )
-            time.sleep(1.0)
+        #     # 单题提交
+        #     time.sleep(self.persubmit_delay)  # 提交延迟
+        #     try:
+        #         result = self.exam_dto.submit(index=index, question=question)
+        #     except APIError as e:
+        #         self.logger.warning(
+        #             f"题目提交失败 -> {e.__class__.__name__} {e.__str__()} " f"[{self.exam_dto}]"
+        #         )
+        #         msg_console.update(
+        #             Panel(
+        #                 f"{e.__class__.__name__} {e.__str__()}", title="提交失败！", border_style="red"
+        #             )
+        #         )
+        #     else:
+        #         self.logger.info(f"提交成功 [{self.exam_dto}]")
+        #         msg_console.update(
+        #             Panel(
+        #                 JSON.from_data(result, ensure_ascii=False),
+        #                 title="题目提交成功 QwQ！",
+        #                 border_style="green",
+        #             )
+        #         )
+        #     time.sleep(1.0)
 
         # 答题完毕处理
         self.finish_flag = True
